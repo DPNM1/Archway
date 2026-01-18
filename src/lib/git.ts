@@ -4,7 +4,8 @@ import fs from "fs/promises";
 import os from "os";
 
 // Directory to store cloned repos temporarily
-export const REPO_DIR = path.join(process.cwd(), "..", "tmp_repos");
+// Using os.tmpdir() ensures it works on Vercel's read-only file system (only /tmp is writable)
+export const REPO_DIR = path.join(os.tmpdir(), "archway_repos");
 
 export async function cloneRepository(repoUrl: string): Promise<string> {
     const git = simpleGit();
