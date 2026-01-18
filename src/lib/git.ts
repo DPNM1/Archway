@@ -1,6 +1,8 @@
-import simpleGit from "simple-git";
+import * as git from "isomorphic-git";
+import http from "isomorphic-git/http/node";
 import path from "path";
-import fs from "fs/promises";
+import fs from "fs";
+import fsp from "fs/promises";
 import os from "os";
 
 // Directory to store cloned repos temporarily
@@ -8,21 +10,28 @@ import os from "os";
 export const REPO_DIR = path.join(os.tmpdir(), "archway_repos");
 
 export async function cloneRepository(repoUrl: string): Promise<string> {
-    const git = simpleGit();
     const repoName = repoUrl.split("/").pop()?.replace(".git", "") || `repo-${Date.now()}`;
     const targetPath = path.join(REPO_DIR, repoName);
 
     // Ensure clone directory exists
     try {
-        await fs.access(targetPath);
-        // If exists, pull latest? Or just return path for MVP. 
-        // For MVP, if it exists, we assume it's valid. 
-        // Real app would likely use unique IDs.
+        await fsp.access(targetPath);
+        // If exists, for MVP we assume it's valid.
         return targetPath;
     } catch {
         // Doesn't exist, clone it
-        await fs.mkdir(REPO_DIR, { recursive: true });
-        await git.clone(repoUrl, targetPath);
+        await fsp.mkdir(REPO_DIR, { recursive: true });
+
+        // isomorphic-git clone
+        await git.clone({
+            fs,
+            http,
+            dir: targetPath,
+            url: repoUrl,
+            singleBranch: true,
+            depth: 1
+        });
+
         return targetPath;
     }
 }
