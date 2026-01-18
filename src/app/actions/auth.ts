@@ -47,3 +47,23 @@ export async function getUser() {
     const { data: { user } } = await supabase.auth.getUser();
     return user;
 }
+
+export async function getRepositoryHistory() {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return [];
+
+    const { data, error } = await supabase
+        .from("repositories")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("last_analyzed_at", { ascending: false });
+
+    if (error) {
+        console.error("Error fetching history:", error);
+        return [];
+    }
+
+    return data;
+}

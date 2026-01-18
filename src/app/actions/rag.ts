@@ -12,7 +12,7 @@ interface CodeChunk {
 }
 
 const HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
-const HF_API_URL = `https://api-inference.huggingface.co/models/${HF_MODEL}`;
+const HF_API_URL = `https://router.huggingface.co/models/${HF_MODEL}`;
 
 async function getEmbeddings(texts: string[]): Promise<number[][]> {
     const token = process.env.HUGGING_FACE_TOKEN;

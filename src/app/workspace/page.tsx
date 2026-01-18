@@ -271,7 +271,7 @@ function WorkspaceContent() {
 
     // Resizable sidebar logic
     const [chatWidth, setChatWidth] = useState(380);
-    const [isChatCollapsed, setIsChatCollapsed] = useState(false);
+    const [isChatCollapsed, setIsChatCollapsed] = useState(true);
     const [isResizing, setIsResizing] = useState(false);
 
     const startResizing = useCallback(() => {
