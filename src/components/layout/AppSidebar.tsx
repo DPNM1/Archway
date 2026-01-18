@@ -106,7 +106,9 @@ export function AppSidebar() {
             </div>
 
             <nav className={`py-4 space-y-2 ${isCollapsed ? 'px-2' : 'px-4'}`}>
-                <NavLinks isCollapsed={isCollapsed} />
+                <Suspense fallback={null}>
+                    <NavLinks isCollapsed={isCollapsed} />
+                </Suspense>
             </nav>
 
             {/* History Section */}
