@@ -41,7 +41,7 @@ export function LoginDialog({ isOpen, onOpenChange }: LoginDialogProps) {
         const { error } = await supabase.auth.signInWithOAuth({
             provider: "github",
             options: {
-                redirectTo: `${window.location.origin}/auth/callback`,
+                redirectTo: `${window.location.origin}/auth/callback?next=/explorer`,
             },
         });
         if (error) setMessage(error.message);
@@ -53,12 +53,12 @@ export function LoginDialog({ isOpen, onOpenChange }: LoginDialogProps) {
         if (!email) return;
         setLoading(true);
         console.log("Attempting login with:", email);
-        console.log("Redirect URL:", `${window.location.origin}/auth/callback`);
+        console.log("Redirect URL:", `${window.location.origin}/auth/callback?next=/explorer`);
 
         const { error } = await supabase.auth.signInWithOtp({
             email,
             options: {
-                emailRedirectTo: `${window.location.origin}/auth/callback`,
+                emailRedirectTo: `${window.location.origin}/auth/callback?next=/explorer`,
             },
         });
 

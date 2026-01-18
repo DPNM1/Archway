@@ -82,7 +82,7 @@ const ZoneNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                 stiffness: 300,
                 damping: 30,
             }}
-            className="glass-panel node-transition rounded-lg border-2 border-dashed flex flex-col relative group"
+            className="glass-panel node-transition rounded-lg border-2 border-dashed flex flex-col relative group overflow-hidden"
             style={{
                 width: data.width,
                 height: data.height,
@@ -90,20 +90,24 @@ const ZoneNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                 borderColor: data.color,
             }}
         >
-            <div className="absolute -top-6 left-0 px-2 py-0.5 rounded text-xs font-bold text-white bg-black/50 backdrop-blur-sm border border-white/10 flex items-center gap-2">
-                <span style={{ color: data.color }}>{data.label}</span>
+            <div
+                className="w-full h-8 px-2 flex items-center justify-between border-b border-white/10 shrink-0"
+                style={{ backgroundColor: `${data.color}40` }}
+            >
+                <span className="text-xs font-bold text-white drop-shadow-md truncate max-w-[80%]">{data.label}</span>
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
                         if (data.onDelete) data.onDelete(data.id);
                     }}
-                    className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+                    className="text-white/80 hover:text-red-400 transition-colors p-1 hover:bg-black/20 rounded"
+                    title="Delete Zone"
                 >
-                    <Trash2 size={10} />
+                    <Trash2 size={12} />
                 </button>
             </div>
             {/* Clickable background for drag */}
-            <div className="w-full h-full" />
+            <div className="w-full flex-1" />
         </motion.div>
     );
 };
@@ -877,8 +881,9 @@ function DependencyGraphContent({
                 width: pendingZone.width,
                 height: pendingZone.height,
                 color: zoneColor,
+                color: zoneColor,
                 onDelete: (id: string) => {
-                    setZones(prev => prev.filter(z => z.id !== id));
+                    setZones((prev: Node[]) => prev.filter((z) => z.id !== id));
                 }
             },
             zIndex: -1,

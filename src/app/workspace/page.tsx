@@ -149,7 +149,10 @@ function WorkspaceContent() {
                 label: name,
                 color: color || "#3b82f6",
                 width: 300,
-                height: 200
+                height: 200,
+                onDelete: (id: string) => {
+                    setZones((prev) => prev.filter((z) => z.id !== id));
+                }
             }
         };
 
