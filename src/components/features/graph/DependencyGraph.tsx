@@ -1,17 +1,22 @@
 "use client";
 
-import { useMemo, useCallback, useState, useEffect } from 'react';
+import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState, BackgroundVariant, Node, Edge, Position, Handle, NodeProps, useReactFlow, ReactFlowProvider } from '@xyflow/react';
 import dagre from 'dagre';
 import '@xyflow/react/dist/style.css';
-import type { GraphData, GraphNode } from '@/lib/structure-parser';
-import { Folder, File, Maximize2, Minimize2, ChevronRight, X, Pencil, Check, RotateCcw, Scissors } from "lucide-react";
+import type { GraphData, GraphNode, MetricData } from '@/lib/structure-parser';
+import { Folder, File, Maximize2, Minimize2, ChevronRight, X, Pencil, Check, RotateCcw, Scissors, ExternalLink, Square, Palette, Plus, Trash2, Activity } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { readFileContent, updateFileContent } from '@/app/actions/file';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { metricToHSL } from '@/lib/heatmap-utils';
 
 import { getLanguage, getLanguageMetadata } from '@/lib/languages';
+import Editor from '@monaco-editor/react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface StructureGraphProps {
     data: GraphData;
@@ -26,6 +31,13 @@ interface StructureGraphProps {
     virtualEdges?: Edge[];
     onVirtualNodesChange?: (nodes: (prev: Node[]) => Node[]) => void;
     onVirtualEdgesChange?: (edges: (prev: Edge[]) => Edge[]) => void;
+    onOpenInModal?: (filePath: string, content: string) => void;
+    onVirtualNodeUpdate?: (nodeId: string, newContent: string) => void;
+    // Lifted state
+    zones?: Node[];
+    onZonesChange?: (zones: Node[] | ((prev: Node[]) => Node[])) => void;
+    expandedIds?: Set<string>;
+    onExpandedIdsChange?: (ids: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
 }
 
 interface CustomNodeData {
@@ -38,11 +50,111 @@ interface CustomNodeData {
     isHighlighted?: boolean;
     highlightedLines?: number[];
     onSplit?: (parentId: string, range: string, sliceContent: string) => void;
+    onOpenInModal?: (filePath: string, content: string) => void;
+    onUpdateContent?: (nodeId: string, newContent: string) => void;
     sourceFile?: string;
     lineRange?: string;
     content?: string;
+    // Zone properties
+    width?: number;
+    height?: number;
+    color?: string;
+    onDelete?: (id: string) => void;
+    // Heatmap properties
+    metrics?: MetricData;
+    heatmapMode?: 'off' | 'complexity' | 'coupling' | 'size';
+    bootDelay?: number;
+    isBooted?: boolean;
     [key: string]: any;
 }
+
+export type HeatmapMode = 'off' | 'complexity' | 'coupling' | 'size';
+
+// Zone Node for Custom Areas
+const ZoneNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
+    return (
+        <motion.div
+            layout
+            initial={false}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{
+                type: "spring",
+                stiffness: 300,
+                damping: 30,
+            }}
+            className="glass-panel node-transition rounded-lg border-2 border-dashed flex flex-col relative group"
+            style={{
+                width: data.width,
+                height: data.height,
+                backgroundColor: `${data.color}20`, // 20% opacity
+                borderColor: data.color,
+            }}
+        >
+            <div className="absolute -top-6 left-0 px-2 py-0.5 rounded text-xs font-bold text-white bg-black/50 backdrop-blur-sm border border-white/10 flex items-center gap-2">
+                <span style={{ color: data.color }}>{data.label}</span>
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if (data.onDelete) data.onDelete(data.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+                >
+                    <Trash2 size={10} />
+                </button>
+            </div>
+            {/* Clickable background for drag */}
+            <div className="w-full h-full" />
+        </motion.div>
+    );
+};
+
+// Border Beam Component for sophisticated edges
+const BorderBeam = () => (
+    <div className="border-beam-container">
+        <div className="border-beam" />
+    </div>
+);
+
+// Custom Neural Edge for animated data flow
+const NeuralEdge = ({
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    style = {},
+    markerEnd,
+}: any) => {
+    const [edgePath] = useMemo(() => {
+        // Simple cubic bezier calculation or use XYFlow utilities
+        // For simplicity, we'll use a direct path or fetch from XYFlow if available
+        // But since we want "Neural" feel, let's make it a bit smoother
+        const diffX = targetX - sourceX;
+        const diffY = targetY - sourceY;
+        const path = `M${sourceX},${sourceY} C${sourceX + diffX / 2},${sourceY} ${sourceX + diffX / 2},${targetY} ${targetX},${targetY}`;
+        return [path];
+    }, [sourceX, sourceY, targetX, targetY]);
+
+    return (
+        <>
+            <path
+                id={id}
+                style={{ ...style, strokeWidth: 3, stroke: 'rgba(255,255,255,0.05)', fill: 'none' }}
+                className="react-flow__edge-path"
+                d={edgePath}
+                markerEnd={markerEnd}
+            />
+            <path
+                style={{ ...style, strokeWidth: 2, strokeDasharray: '10, 20', fill: 'none' }}
+                className="react-flow__edge-path animate-neural-flow"
+                d={edgePath}
+                stroke="rgba(255,255,255,0.4)"
+            />
+        </>
+    );
+};
 
 // Virtual Code Node for Slices
 const VirtualCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
@@ -51,13 +163,56 @@ const VirtualCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
     const language = useMemo(() => getLanguage(data.sourceFile || "code.txt"), [data.sourceFile]);
     const metadata = useMemo(() => getLanguageMetadata(data.sourceFile || "code.txt"), [data.sourceFile]);
 
+    const [isEditing, setIsEditing] = useState(false);
+    const [editedContent, setEditedContent] = useState(data.content || "");
+    const [saving, setSaving] = useState(false);
+
+    // Sync content when data changes
+    useEffect(() => {
+        setEditedContent(data.content || "");
+    }, [data.content]);
+
+    const handleSave = async () => {
+        // For virtual nodes, we update the local state and notify parent
+        setSaving(true);
+        // Simulate save delay for consistency
+        await new Promise(resolve => setTimeout(resolve, 500));
+        setSaving(false);
+        setIsEditing(false);
+        // Update the node's content via the onUpdateContent callback if provided
+        if (data.onUpdateContent) {
+            data.onUpdateContent(data.id, editedContent);
+        }
+    };
+
+    const heatmapStyle = useMemo(() => {
+        if (!data.heatmapMode || data.heatmapMode === 'off' || !data.metrics) return {};
+        const value = data.metrics[data.heatmapMode] || 0;
+        return {
+            backgroundColor: metricToHSL(value),
+            borderColor: 'rgba(255,255,255,0.2)',
+            color: 'white'
+        };
+    }, [data.heatmapMode, data.metrics]);
+
     return (
-        <div
-            className={`bg-card text-card-foreground rounded-lg border flex flex-col transition-all duration-300 overflow-hidden ${isExpanded ? "w-[450px] h-[350px] shadow-2xl" : "w-[200px] h-12 shadow-sm"
-                } ${isHighlighted ? "border-primary border-4 ring-4 ring-primary/20" : "border-border"}`}
+        <motion.div
+            layout
+            initial={false}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{
+                type: "spring",
+                stiffness: 260,
+                damping: 20,
+            }}
+            className={`glass-panel node-transition text-card-foreground rounded-xl border flex flex-col overflow-hidden relative group ${isExpanded ? "w-[450px] h-[350px] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)]" : "w-[200px] h-12 shadow-sm"
+                } ${isHighlighted ? "border-primary/50 ring-4 ring-primary/10 scale-105 z-50" : "border-white/10"} ${data.isInactive ? "opacity-40 blur-[2px] grayscale-[0.5] scale-[0.98]" : "opacity-100 blur-0 grayscale-0"}`}
+            style={heatmapStyle}
         >
+            <BorderBeam />
+            {isHighlighted && <div className="absolute inset-0 rounded-xl animate-ping-glow pointer-events-none z-[-1]" />}
             <Handle type="target" position={Position.Left} className="opacity-0" />
-            <div className={`p-3 flex items-center gap-2 border-b border-border bg-muted/20 shrink-0`}>
+            <div className={`p-3 flex items-center gap-2 border-b border-white/10 glass-header shrink-0`}>
                 <div className={`flex items-center justify-center w-5 h-5 rounded bg-muted/30 shrink-0 ${metadata.color}`}>
                     <Scissors size={12} />
                 </div>
@@ -66,54 +221,155 @@ const VirtualCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                     <span className="text-xs font-medium truncate max-w-[200px]">{data.label}</span>
                 </div>
                 {isExpanded && (
-                    <button
-                        onClick={(e: React.MouseEvent) => {
-                            e.stopPropagation();
-                            if (data.onToggle) data.onToggle(data.id);
-                        }}
-                        className="ml-auto p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
-                    >
-                        <X size={12} />
-                    </button>
+                    <div className="ml-auto flex items-center gap-1">
+                        {!isEditing ? (
+                            <>
+                                <button
+                                    onClick={(e: React.MouseEvent) => {
+                                        e.stopPropagation();
+                                        setIsEditing(true);
+                                    }}
+                                    className="p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
+                                    title="Edit slice"
+                                >
+                                    <Pencil size={12} />
+                                </button>
+                                {data.onOpenInModal && (
+                                    <button
+                                        onClick={(e: React.MouseEvent) => {
+                                            e.stopPropagation();
+                                            data.onOpenInModal!(data.sourceFile || data.id, editedContent);
+                                        }}
+                                        className="p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
+                                        title="Open in full editor"
+                                    >
+                                        <ExternalLink size={12} />
+                                    </button>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <button
+                                    onClick={(e: React.MouseEvent) => {
+                                        e.stopPropagation();
+                                        handleSave();
+                                    }}
+                                    disabled={saving}
+                                    className="p-1 hover:bg-primary/20 hover:text-primary rounded text-muted-foreground transition-colors disabled:opacity-50"
+                                    title="Save changes"
+                                >
+                                    <Check size={12} className={saving ? "animate-pulse" : ""} />
+                                </button>
+                                <button
+                                    onClick={(e: React.MouseEvent) => {
+                                        e.stopPropagation();
+                                        setIsEditing(false);
+                                        setEditedContent(data.content || "");
+                                    }}
+                                    disabled={saving}
+                                    className="p-1 hover:bg-destructive/20 hover:text-destructive rounded text-muted-foreground transition-colors disabled:opacity-50"
+                                    title="Cancel"
+                                >
+                                    <RotateCcw size={12} />
+                                </button>
+                            </>
+                        )}
+                        <span className="mx-1 h-3 w-[1px] bg-border" />
+                        <button
+                            onClick={(e: React.MouseEvent) => {
+                                e.stopPropagation();
+                                if (data.onToggle) data.onToggle(data.id);
+                            }}
+                            className="p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
+                        >
+                            <X size={12} />
+                        </button>
+                    </div>
                 )}
             </div>
             {isExpanded && (
                 <div
-                    className="flex-1 bg-[#1e1e1e] w-full h-full nodrag nowheel overflow-auto scrollbar-thin cursor-auto"
+                    className="flex-1 bg-[#0a0a0c]/60 backdrop-blur-md w-full h-full nodrag nowheel overflow-hidden cursor-auto relative"
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <div className="pb-10 min-w-full w-fit">
-                        <SyntaxHighlighter
-                            language={language}
-                            style={vscDarkPlus}
-                            customStyle={{
-                                margin: 0,
-                                padding: '1.5rem',
-                                background: 'transparent',
-                                fontSize: '12px',
-                                lineHeight: '1.5',
-                                overflowX: 'visible',
-                                whiteSpace: 'pre',
-                                display: 'inline-block',
-                                minWidth: '100%',
-                            }}
-                            showLineNumbers={true}
-                            lineNumberStyle={{
-                                minWidth: '3.5em',
-                                paddingRight: '1.2em',
-                                color: '#858585',
-                                textAlign: 'right',
-                                userSelect: 'none',
-                                opacity: 0.3
-                            }}
-                        >
-                            {data.content || " "}
-                        </SyntaxHighlighter>
-                    </div>
+                    <div className="scanline-overlay" />
+                    {isEditing ? (
+                        <div className="w-full h-full p-2 bg-transparent">
+                            <Editor
+                                height="100%"
+                                width="100%"
+                                language={language}
+                                theme="vs-dark"
+                                value={editedContent}
+                                options={{
+                                    fontSize: 12,
+                                    minimap: { enabled: false },
+                                    scrollBeyondLastLine: false,
+                                    automaticLayout: true,
+                                    padding: { top: 12 },
+                                    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                                    lineNumbers: "on",
+                                    renderLineHighlight: "all",
+                                    scrollbar: {
+                                        vertical: "visible",
+                                        horizontal: "visible",
+                                        useShadows: false,
+                                        verticalScrollbarSize: 8,
+                                        horizontalScrollbarSize: 8
+                                    }
+                                }}
+                                onChange={(value) => setEditedContent(value || "")}
+                                beforeMount={(monaco) => {
+                                    // Define a transparent theme
+                                    monaco.editor.defineTheme('glassTheme', {
+                                        base: 'vs-dark',
+                                        inherit: true,
+                                        rules: [],
+                                        colors: {
+                                            'editor.background': '#00000000',
+                                            'editor.lineHighlightBackground': '#ffffff10',
+                                        }
+                                    });
+                                }}
+                                onMount={(editor) => {
+                                    editor.updateOptions({ theme: 'glassTheme' });
+                                }}
+                            />
+                        </div>
+                    ) : (
+                        <div className="pb-10 min-w-full w-fit overflow-auto h-full">
+                            <SyntaxHighlighter
+                                language={language}
+                                style={vscDarkPlus}
+                                customStyle={{
+                                    margin: 0,
+                                    padding: '1.5rem',
+                                    background: 'transparent',
+                                    fontSize: '12px',
+                                    lineHeight: '1.5',
+                                    overflowX: 'visible',
+                                    whiteSpace: 'pre',
+                                    display: 'inline-block',
+                                    minWidth: '100%',
+                                }}
+                                showLineNumbers={true}
+                                lineNumberStyle={{
+                                    minWidth: '3.5em',
+                                    paddingRight: '1.2em',
+                                    color: '#858585',
+                                    textAlign: 'right',
+                                    userSelect: 'none',
+                                    opacity: 0.3
+                                }}
+                            >
+                                {editedContent || " "}
+                            </SyntaxHighlighter>
+                        </div>
+                    )}
                 </div>
             )}
             <Handle type="source" position={Position.Right} className="opacity-0" />
-        </div>
+        </motion.div>
     );
 };
 
@@ -127,7 +383,6 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
     const [editedContent, setEditedContent] = useState("");
     const [saving, setSaving] = useState(false);
 
-    // Selection state for splitting
     const [selectionStart, setSelectionStart] = useState<number | null>(null);
     const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
 
@@ -184,13 +439,30 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
         setSelectionEnd(null);
     };
 
+    const heatmapStyle = useMemo(() => {
+        if (!data.heatmapMode || data.heatmapMode === 'off' || !data.metrics) return {};
+        const value = data.metrics[data.heatmapMode] || 0;
+        return {
+            backgroundColor: metricToHSL(value),
+            borderColor: 'rgba(255,255,255,0.2)',
+            color: 'white'
+        };
+    }, [data.heatmapMode, data.metrics]);
+
     return (
-        <div
-            className={`bg-card text-card-foreground rounded-lg border flex flex-col transition-all duration-300 overflow-hidden ${isExpanded ? "w-[450px] h-[350px] shadow-2xl" : "w-[200px] h-12 shadow-sm"
-                } ${isHighlighted ? "border-primary border-4 ring-4 ring-primary/20" : "border-border"}`}
+        <motion.div
+            layout
+            initial={false}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className={`glass-panel node-transition text-card-foreground rounded-xl border flex flex-col overflow-hidden relative group ${isExpanded ? "w-[450px] h-[350px] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)]" : "w-[200px] h-12 shadow-sm"
+                } ${isHighlighted ? "border-primary/50 ring-4 ring-primary/10 scale-105 z-50" : "border-white/10"} ${data.isInactive ? "opacity-40 blur-[2px] grayscale-[0.5] scale-[0.98]" : "opacity-100 blur-0 grayscale-0"}`}
+            style={heatmapStyle}
         >
+            <BorderBeam />
+            {isHighlighted && <div className="absolute inset-0 rounded-xl animate-ping-glow pointer-events-none z-[-1]" />}
             <Handle type="target" position={Position.Left} className="opacity-0" />
-            <div className={`p-3 flex items-center gap-2 border-b border-border bg-muted/20 shrink-0`}>
+
+            <div className={`p-3 flex items-center gap-2 border-b border-white/10 glass-header shrink-0`}>
                 <div className={`flex items-center justify-center w-5 h-5 rounded bg-muted/30 shrink-0 ${metadata.color}`}>
                     <File size={12} />
                 </div>
@@ -207,7 +479,7 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                                         setIsEditing(true);
                                         setEditedContent(content);
                                     }}
-                                    className="p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
+                                    className="p-1 hover:bg-white/10 rounded text-muted-foreground transition-colors"
                                     title="Edit file"
                                 >
                                     <Pencil size={12} />
@@ -227,6 +499,18 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                             </>
                         ) : (
                             <>
+                                <button
+                                    onClick={(e: React.MouseEvent) => {
+                                        e.stopPropagation();
+                                        if (data.onOpenInModal) {
+                                            data.onOpenInModal(data.id, editedContent);
+                                        }
+                                    }}
+                                    className="p-1 hover:bg-white/10 rounded text-muted-foreground transition-colors"
+                                    title="Open in full editor"
+                                >
+                                    <ExternalLink size={12} />
+                                </button>
                                 <button
                                     onClick={(e: React.MouseEvent) => {
                                         e.stopPropagation();
@@ -252,13 +536,13 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                                 </button>
                             </>
                         )}
-                        <span className="mx-1 h-3 w-[1px] bg-border" />
+                        <span className="mx-1 h-3 w-[1px] bg-white/10" />
                         <button
                             onClick={(e: React.MouseEvent) => {
                                 e.stopPropagation();
                                 if (data.onToggle) data.onToggle(data.id);
                             }}
-                            className="p-1 hover:bg-muted rounded text-muted-foreground transition-colors"
+                            className="p-1 hover:bg-white/10 rounded text-muted-foreground transition-colors"
                         >
                             <X size={12} />
                         </button>
@@ -267,20 +551,55 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
             </div>
             {isExpanded && (
                 <div
-                    className="flex-1 bg-[#1e1e1e] w-full h-full nodrag nowheel overflow-auto scrollbar-thin cursor-auto selection:bg-primary/30"
+                    className="flex-1 bg-[#0a0a0c]/60 backdrop-blur-md w-full h-full nodrag nowheel overflow-auto scrollbar-thin cursor-auto selection:bg-primary/30 relative"
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <div className="pb-20 min-w-full w-fit h-full">
+                    <div className="scanline-overlay" />
+                    <div className="w-full h-full relative">
                         {loading ? (
                             <div className="p-4 text-[10px] font-mono text-muted-foreground animate-pulse">Loading code...</div>
                         ) : isEditing ? (
-                            <textarea
-                                value={editedContent}
-                                onChange={(e) => setEditedContent(e.target.value)}
-                                className="w-full h-full p-4 bg-transparent text-white font-mono text-[10px] outline-none resize-none leading-[1.4]"
-                                autoFocus
-                                spellCheck={false}
-                            />
+                            <div className="w-full h-full p-2 bg-transparent">
+                                <Editor
+                                    height="100%"
+                                    width="100%"
+                                    language={language}
+                                    theme="vs-dark"
+                                    value={editedContent}
+                                    options={{
+                                        fontSize: 12,
+                                        minimap: { enabled: false },
+                                        scrollBeyondLastLine: false,
+                                        automaticLayout: true,
+                                        padding: { top: 12 },
+                                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                                        lineNumbers: "on",
+                                        renderLineHighlight: "all",
+                                        scrollbar: {
+                                            vertical: "visible",
+                                            horizontal: "visible",
+                                            useShadows: false,
+                                            verticalScrollbarSize: 8,
+                                            horizontalScrollbarSize: 8
+                                        }
+                                    }}
+                                    onChange={(value) => setEditedContent(value || "")}
+                                    beforeMount={(monaco) => {
+                                        monaco.editor.defineTheme('glassTheme', {
+                                            base: 'vs-dark',
+                                            inherit: true,
+                                            rules: [],
+                                            colors: {
+                                                'editor.background': '#00000000',
+                                                'editor.lineHighlightBackground': '#ffffff10',
+                                            }
+                                        });
+                                    }}
+                                    onMount={(editor) => {
+                                        editor.updateOptions({ theme: 'glassTheme' });
+                                    }}
+                                />
+                            </div>
                         ) : (
                             <SyntaxHighlighter
                                 language={language}
@@ -342,28 +661,54 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                 </div>
             )}
             <Handle type="source" position={Position.Right} className="opacity-0" />
-        </div>
+        </motion.div>
     );
 };
 
+
 // Folder Node
 const FolderNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
+    const isExpanded = data.expanded;
     const isHighlighted = data.isHighlighted;
+
+    const heatmapStyle = useMemo(() => {
+        if (!data.heatmapMode || data.heatmapMode === 'off' || !data.metrics) return {};
+        const value = data.metrics[data.heatmapMode] || 0;
+        return {
+            backgroundColor: metricToHSL(value),
+            borderColor: 'rgba(255,255,255,0.2)',
+            color: 'white'
+        };
+    }, [data.heatmapMode, data.metrics]);
+
     return (
-        <div
-            className={`bg-card text-card-foreground rounded-lg p-3 flex items-center justify-center gap-2 w-[220px] h-12 font-bold shadow-[4px_4px_0px_var(--muted-foreground)] border-2 transition-all duration-300 ${isHighlighted ? "border-primary border-4 shadow-primary/20 scale-105" : "border-foreground"}`}
+        <motion.div
+            layout
+            initial={false}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{
+                type: "spring",
+                stiffness: 260,
+                damping: 20,
+            }}
+            className={`glass-panel node-transition text-card-foreground rounded-xl border flex flex-col overflow-hidden min-w-[180px] relative group ${isHighlighted ? "border-primary/50 ring-4 ring-primary/10 scale-105 z-50" : "border-white/10"} ${data.isInactive ? "opacity-40 blur-[2px] grayscale-[0.5] scale-[0.98]" : "opacity-100 blur-0 grayscale-0"}`}
+            style={heatmapStyle}
         >
+            <BorderBeam />
+            {isHighlighted && <div className="absolute inset-0 rounded-xl animate-ping-glow pointer-events-none z-[-1]" />}
             <Handle type="target" position={Position.Left} className="opacity-0" />
-            <div className={`p-1 rounded bg-muted/40 ${isHighlighted ? "text-primary" : "text-muted-foreground"}`}>
-                <Folder size={14} />
+            <div className={`p-3 flex items-center gap-2 border-b border-white/10 glass-header shrink-0 italic`}>
+                <div className={`p-1 rounded bg-white/10 ${isHighlighted ? "text-primary shadow-[0_0_10px_rgba(59,130,246,0.3)]" : "text-muted-foreground"}`}>
+                    <Folder size={14} />
+                </div>
+                <span className={`text-xs truncate flex-1 ${isHighlighted ? "text-primary font-bold" : ""}`}>{data.label}</span>
+                <ChevronRight
+                    size={14}
+                    className={`transition-transform duration-200 shrink-0 ${data.expanded ? "rotate-90" : ""} ${isHighlighted ? "text-primary" : ""}`}
+                />
             </div>
-            <span className={`text-xs truncate flex-1 ${isHighlighted ? "text-primary" : ""}`}>{data.label}</span>
-            <ChevronRight
-                size={14}
-                className={`transition-transform duration-200 shrink-0 ${data.expanded ? "rotate-90" : ""} ${isHighlighted ? "text-primary" : ""}`}
-            />
             <Handle type="source" position={Position.Right} className="opacity-0" />
-        </div>
+        </motion.div>
     );
 };
 
@@ -371,18 +716,23 @@ const nodeTypes = {
     file: FileCodeNode,
     dir: FolderNode,
     virtual: VirtualCodeNode,
+    zone: ZoneNode,
+};
+
+const edgeTypes = {
+    neural: NeuralEdge,
 };
 
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
 
 const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
-    dagreGraph.setGraph({ rankdir: 'LR' });
+    dagreGraph.setGraph({ rankdir: 'LR', nodesep: 60, ranksep: 100 });
 
     nodes.forEach((node) => {
         const isExp = node.data?.isExpanded;
-        const width = isExp ? 450 : 200;
-        const height = isExp ? 350 : 50;
+        const width = isExp ? (node.type === 'virtual' ? 400 : 450) : (node.type === 'virtual' ? 180 : 200);
+        const height = isExp ? (node.type === 'virtual' ? 300 : 350) : 50;
         dagreGraph.setNode(node.id, { width, height });
     });
 
@@ -421,11 +771,124 @@ function DependencyGraphContent({
     virtualNodes = [],
     virtualEdges = [],
     onVirtualNodesChange,
-    onVirtualEdgesChange
+    onVirtualEdgesChange,
+    onOpenInModal,
+    onVirtualNodeUpdate,
+    zones: propsZones,
+    onZonesChange,
+    expandedIds: propsExpandedIds,
+    onExpandedIdsChange
 }: StructureGraphProps) {
-    const { fitView } = useReactFlow();
-    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+    const { fitView, screenToFlowPosition } = useReactFlow();
+
+    // Use internal state if props are not provided (fallback)
+    const [internalExpandedIds, setInternalExpandedIds] = useState<Set<string>>(new Set());
+    const [internalZones, setInternalZones] = useState<Node[]>([]);
+
+    const expandedIds = propsExpandedIds ?? internalExpandedIds;
+    const setExpandedIds = onExpandedIdsChange ?? setInternalExpandedIds;
+    const zones = propsZones ?? internalZones;
+    const setZones = onZonesChange ?? setInternalZones;
+
     const [codeExpandedIds, setCodeExpandedIds] = useState<Set<string>>(new Set());
+
+
+    const [isDrawingZone, setIsDrawingZone] = useState(false);
+    // Store screen coordinates for smooth overlay rendering
+    const [screenDragStart, setScreenDragStart] = useState<{ x: number, y: number } | null>(null);
+    const [screenCurrentDrag, setScreenCurrentDrag] = useState<{ x: number, y: number } | null>(null);
+    const [zoneEditorOpen, setZoneEditorOpen] = useState(false);
+    const [pendingZone, setPendingZone] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+    const [zoneName, setZoneName] = useState("");
+    const [zoneColor, setZoneColor] = useState("#3b82f6");
+
+    // Heatmap mode state
+    const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('off');
+
+    // Get reference to the container for position calculations
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    const handlePaneClick = useCallback((event: React.MouseEvent) => {
+        if (!isDrawingZone) {
+            if (onPaneClick) onPaneClick();
+            return;
+        }
+
+        // Get position relative to the container
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+
+        if (!screenDragStart) {
+            setScreenDragStart({ x: screenX, y: screenY });
+            setScreenCurrentDrag({ x: screenX, y: screenY });
+        } else {
+            // Finish drawing - convert to flow coordinates for the actual zone
+            const flowStart = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+            const flowStartPoint = screenToFlowPosition({
+                x: screenDragStart.x + rect.left,
+                y: screenDragStart.y + rect.top
+            });
+
+            const width = Math.abs(flowStart.x - flowStartPoint.x);
+            const height = Math.abs(flowStart.y - flowStartPoint.y);
+            const x = Math.min(flowStart.x, flowStartPoint.x);
+            const y = Math.min(flowStart.y, flowStartPoint.y);
+
+            if (width > 50 && height > 50) {
+                setPendingZone({ x, y, width, height });
+                setZoneEditorOpen(true);
+                setIsDrawingZone(false);
+                setScreenDragStart(null);
+                setScreenCurrentDrag(null);
+            } else {
+                // Too small, reset
+                setScreenDragStart(null);
+                setScreenCurrentDrag(null);
+            }
+        }
+    }, [isDrawingZone, screenDragStart, screenToFlowPosition, onPaneClick]);
+
+    const handlePaneMouseMove = useCallback((event: React.MouseEvent) => {
+        if (!isDrawingZone || !screenDragStart) return;
+
+        // Get position relative to the container
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+
+        setScreenCurrentDrag({ x: screenX, y: screenY });
+    }, [isDrawingZone, screenDragStart]);
+
+    const handleCreateZone = () => {
+        if (!pendingZone || !zoneName) return;
+
+        const newZone: Node = {
+            id: `zone-${Date.now()}`,
+            type: 'zone',
+            position: { x: pendingZone.x, y: pendingZone.y },
+            data: {
+                id: `zone-${Date.now()}`,
+                label: zoneName,
+                width: pendingZone.width,
+                height: pendingZone.height,
+                color: zoneColor,
+                onDelete: (id: string) => {
+                    setZones(prev => prev.filter(z => z.id !== id));
+                }
+            },
+            zIndex: -1,
+        };
+
+        setZones(prev => [...prev, newZone]);
+        setZoneEditorOpen(false);
+        setZoneName("");
+        setPendingZone(null);
+    };
 
     const handleSplit = useCallback((parentId: string, range: string, sliceContent: string) => {
         const sliceId = `slice-${parentId}-${range}`;
@@ -548,7 +1011,7 @@ function DependencyGraphContent({
             visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
         );
 
-        const initialNodes: Node[] = visibleNodes.map((node) => ({
+        const initialNodes: Node[] = visibleNodes.map((node, index) => ({
             id: node.id,
             type: node.type === 'dir' ? 'dir' : 'file',
             position: { x: 0, y: 0 },
@@ -558,7 +1021,10 @@ function DependencyGraphContent({
                 expanded: expandedIds.has(node.id),
                 isExpanded: codeExpandedIds.has(node.id),
                 isHighlighted: highlightedId === node.id,
+                isInactive: !!highlightedId && highlightedId !== node.id,
                 highlightedLines: highlightedId === node.id ? highlightedLines : undefined,
+                metrics: node.metrics,
+                heatmapMode: heatmapMode,
                 localPath: localPath,
                 onToggle: () => {
                     if (node.type === 'dir') {
@@ -572,17 +1038,23 @@ function DependencyGraphContent({
                         toggleCodeExpansion(node.id);
                     }
                 },
-                onSplit: handleSplit
+                onSplit: handleSplit,
+                onOpenInModal: onOpenInModal
             }
         }));
 
-        const syncedVirtualNodes = virtualNodes.map(node => ({
+        const syncedVirtualNodes = virtualNodes.map((node, index) => ({
             ...node,
             data: {
                 ...node.data,
                 isExpanded: codeExpandedIds.has(node.id),
                 isHighlighted: node.id === highlightedId,
-                highlightedLines: node.id === highlightedId ? highlightedLines : []
+                isInactive: !!highlightedId && node.id !== highlightedId,
+                highlightedLines: node.id === highlightedId ? highlightedLines : [],
+                metrics: (node.data as any).metrics,
+                heatmapMode: heatmapMode,
+                onOpenInModal: onOpenInModal,
+                onUpdateContent: onVirtualNodeUpdate
             }
         }));
 
@@ -598,18 +1070,20 @@ function DependencyGraphContent({
 
         const layNodes = getLayoutedElements(allNodes, allEdges);
         return { nodes: layNodes, edges: allEdges };
-    }, [data, expandedIds, codeExpandedIds, localPath, toggleCodeExpansion, virtualNodes, virtualEdges, handleSplit, highlightedId, highlightedLines]);
+    }, [data, expandedIds, codeExpandedIds, localPath, toggleCodeExpansion, virtualNodes, virtualEdges, handleSplit, highlightedId, highlightedLines, heatmapMode]);
 
-    const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
+    const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes as Node[]);
     const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
 
     useEffect(() => {
-        setNodes(layoutedNodes);
+        // Only sync zones and layout nodes - don't include drawing preview here
+        const currentNodes = [...zones, ...layoutedNodes];
+        setNodes(currentNodes as Node[]);
         setEdges(layoutedEdges);
-    }, [layoutedNodes, layoutedEdges, setNodes, setEdges]);
+    }, [layoutedNodes, layoutedEdges, setNodes, setEdges, zones]);
 
     const handleNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-        if (node.type === 'virtual') return;
+        if (node.type === 'virtual' || node.type === 'zone') return;
 
         const graphNode = data.nodes.find(n => n.id === node.id);
         if (graphNode?.type === 'dir') {
@@ -631,27 +1105,162 @@ function DependencyGraphContent({
         <div className={`bg-background border border-border/50 overflow-hidden text-foreground flex flex-col transition-all duration-300 w-full h-full relative ${isMaximized ? "shadow-2xl" : "rounded-lg"}`}>
             <div className="p-3 border-b border-border/50 bg-muted/10 flex items-center justify-between shrink-0">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Repository Structure Graph</span>
-                {onMaximizeToggle && (
-                    <button onClick={(e) => { e.stopPropagation(); onMaximizeToggle(); }} className="p-1.5 hover:bg-muted rounded-md transition-colors">
-                        {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center bg-muted/20 rounded-lg p-1 mr-2 border border-border/50">
+                        <button
+                            onClick={() => setHeatmapMode('off')}
+                            className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wider transition-all ${heatmapMode === 'off' ? "bg-background shadow-sm text-foreground font-bold" : "text-muted-foreground hover:text-foreground"}`}
+                        >
+                            Off
+                        </button>
+                        <button
+                            onClick={() => setHeatmapMode('complexity')}
+                            className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wider transition-all ${heatmapMode === 'complexity' ? "bg-background shadow-sm text-foreground font-bold" : "text-muted-foreground hover:text-foreground"}`}
+                        >
+                            Complexity
+                        </button>
+                        <button
+                            onClick={() => setHeatmapMode('coupling')}
+                            className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wider transition-all ${heatmapMode === 'coupling' ? "bg-background shadow-sm text-foreground font-bold" : "text-muted-foreground hover:text-foreground"}`}
+                        >
+                            Coupling
+                        </button>
+                        <button
+                            onClick={() => setHeatmapMode('size')}
+                            className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wider transition-all ${heatmapMode === 'size' ? "bg-background shadow-sm text-foreground font-bold" : "text-muted-foreground hover:text-foreground"}`}
+                        >
+                            Size
+                        </button>
+                    </div>
+                    <button
+                        onClick={() => {
+                            setIsDrawingZone(!isDrawingZone);
+                            setScreenDragStart(null);
+                            setScreenCurrentDrag(null);
+                        }}
+                        className={`p-1.5 rounded-md transition-colors flex items-center gap-1.5 text-xs ${isDrawingZone ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+                        title="Draw a zone area"
+                    >
+                        {isDrawingZone ? <X size={14} /> : <Plus size={14} />}
+                        {isDrawingZone ? "Cancel" : "Add Zone"}
                     </button>
-                )}
+                    {onMaximizeToggle && (
+                        <button onClick={(e) => { e.stopPropagation(); onMaximizeToggle(); }} className="p-1.5 hover:bg-muted rounded-md transition-colors">
+                            {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                        </button>
+                    )}
+                </div>
             </div>
-            <div className="flex-1 relative overflow-hidden">
+            <div ref={containerRef} className="flex-1 relative overflow-hidden">
                 <ReactFlow
                     nodes={nodes}
                     edges={edges}
                     nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    defaultEdgeOptions={{ type: 'neural' }}
                     onNodesChange={onNodesChange}
                     onEdgesChange={onEdgesChange}
                     onNodeClick={handleNodeClick}
-                    onPaneClick={onPaneClick}
+                    onPaneClick={handlePaneClick}
+                    onPaneMouseMove={handlePaneMouseMove}
+                    panOnDrag={!isDrawingZone}
                     fitView
                     fitViewOptions={{ padding: 0.2, duration: 400 }}
+                    minZoom={0.1}
+                    maxZoom={2}
                     proOptions={{ hideAttribution: true }}
+                    style={{ cursor: isDrawingZone ? 'crosshair' : 'default' }}
                 >
-                    <Background variant={BackgroundVariant.Dots} gap={12} size={1} color="var(--muted-foreground)" />
+                    <Background
+                        variant={BackgroundVariant.Dots}
+                        gap={25}
+                        size={2}
+                        color="rgba(255, 255, 255, 0.15)"
+                        className="animated-grid bg-slate-950"
+                    />
+                    <MiniMap
+                        position="bottom-right"
+                        style={{
+                            backgroundColor: 'rgba(10, 10, 12, 0.8)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                        }}
+                        maskColor="rgba(0, 0, 0, 0.5)"
+                        nodeColor={(node) => {
+                            if (node.type === 'dir') return '#3b82f6';
+                            if (node.type === 'virtual') return '#10b981';
+                            return '#64748b';
+                        }}
+                        nodeStrokeWidth={3}
+                        zoomable
+                        pannable
+                    />
                 </ReactFlow>
+                {/* Drawing preview overlay - rendered separately for smooth performance */}
+                {isDrawingZone && screenDragStart && screenCurrentDrag && (
+                    <svg
+                        className="absolute inset-0 pointer-events-none"
+                        style={{ zIndex: 5, width: '100%', height: '100%', overflow: 'visible' }}
+                    >
+                        <rect
+                            x={Math.min(screenDragStart.x, screenCurrentDrag.x)}
+                            y={Math.min(screenDragStart.y, screenCurrentDrag.y)}
+                            width={Math.abs(screenCurrentDrag.x - screenDragStart.x)}
+                            height={Math.abs(screenCurrentDrag.y - screenDragStart.y)}
+                            fill="rgba(59, 130, 246, 0.1)"
+                            stroke="#3b82f6"
+                            strokeWidth="2"
+                            strokeDasharray="8 4"
+                            rx="8"
+                        />
+                    </svg>
+                )}
+                {heatmapMode !== 'off' && (
+                    <div className="absolute bottom-4 left-4 glass-panel p-2 rounded-md shadow-lg z-10 flex flex-col gap-1 min-w-[120px]">
+                        <div className="flex items-center gap-2 mb-1">
+                            <Activity size={10} className="text-primary" />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">Heatmap: {heatmapMode}</span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-gradient-to-r from-[#4ade80] via-[#fbbf24] to-[#ef4444]" />
+                        <div className="flex justify-between items-center text-[8px] uppercase font-medium text-muted-foreground mt-0.5">
+                            <span>Healthy</span>
+                            <span>Hot</span>
+                        </div>
+                    </div>
+                )}
+                {zoneEditorOpen && (
+                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-popover text-popover-foreground p-4 rounded-lg shadow-xl border border-border w-64 z-50">
+                        <h3 className="text-sm font-semibold mb-3">Create Zone</h3>
+                        <div className="space-y-3">
+                            <div className="space-y-1">
+                                <span className="text-xs font-medium">Label</span>
+                                <Input
+                                    value={zoneName}
+                                    onChange={(e) => setZoneName(e.target.value)}
+                                    placeholder="e.g. Core Features"
+                                    className="h-8 text-xs"
+                                    autoFocus
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <span className="text-xs font-medium">Color</span>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="color"
+                                        value={zoneColor}
+                                        onChange={(e) => setZoneColor(e.target.value)}
+                                        className="h-8 w-12 p-0 border-0 rounded cursor-pointer"
+                                    />
+                                    <span className="text-xs text-muted-foreground flex items-center">{zoneColor}</span>
+                                </div>
+                            </div>
+                            <div className="flex gap-2 pt-2">
+                                <Button size="sm" onClick={handleCreateZone} className="flex-1 text-xs h-8">Create</Button>
+                                <Button size="sm" variant="outline" onClick={() => setZoneEditorOpen(false)} className="flex-1 text-xs h-8">Cancel</Button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

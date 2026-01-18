@@ -9,16 +9,27 @@ import { Send, Bot, User } from "lucide-react";
 import { chatWithRepo, ChatMessage } from "@/app/actions/ai";
 import { saveChat, loadChat } from "@/app/actions/chat-persistence";
 import type { FileNode } from "@/lib/file-system";
+import type { GraphNode } from "@/lib/structure-parser";
 import { cn } from "@/lib/utils";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ChatInterfaceProps {
     fileTree: FileNode[];
     currentFileContent?: string;
     repoUrl?: string | null;
-    onAction?: (action: { command: string, node: string, lines?: number[] }) => void;
+    onAction?: (action: {
+        command: string,
+        node?: string,
+        lines?: number[],
+        name?: string,
+        color?: string,
+        nodes?: string[]
+    }) => void;
+    graphNodes?: GraphNode[];
 }
 
-export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction }: ChatInterfaceProps) {
+export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction, graphNodes }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([
         { role: "assistant", content: "Hi! I'm Archway AI. Ask me anything about this codebase." }
     ]);
@@ -60,19 +71,23 @@ export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction 
         setLoading(true);
 
         try {
-            const response = await chatWithRepo(updatedMessages, fileTree, currentFileContent);
+            const response = await chatWithRepo(updatedMessages, fileTree, currentFileContent, repoUrl || undefined, graphNodes);
 
-            // Parse for actions: <ArchwayAction command="..." node="..." lines="..." />
-            const actionRegex = /<ArchwayAction\s+command=["']([^"']+)["']\s+node=["']([^"']+)["'](?:\s+lines=["']([^"']+)["'])?\s*\/?>/gi;
+            // Parse for actions: <ArchwayAction command="..." node="..." lines="..." name="..." color="..." nodes="..." />
+            const actionRegex = /<ArchwayAction\s+([^>]+)\/?>/gi;
             const matches = Array.from(response.matchAll(actionRegex));
 
             matches.forEach(match => {
                 if (onAction) {
-                    const command = match[1];
-                    const node = match[2];
-                    const linesStr = match[3];
-                    let lines: number[] = [];
+                    const attrStr = match[1];
+                    const command = attrStr.match(/command=["']([^"']+)["']/i)?.[1] || "";
+                    const node = attrStr.match(/node=["']([^"']+)["']/i)?.[1];
+                    const linesStr = attrStr.match(/lines=["']([^"']+)["']/i)?.[1];
+                    const name = attrStr.match(/name=["']([^"']+)["']/i)?.[1];
+                    const color = attrStr.match(/color=["']([^"']+)["']/i)?.[1];
+                    const nodesStr = attrStr.match(/nodes=["']([^"']+)["']/i)?.[1];
 
+                    let lines: number[] = [];
                     if (linesStr) {
                         linesStr.split(',').forEach(part => {
                             if (part.includes('-')) {
@@ -84,7 +99,9 @@ export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction 
                         });
                     }
 
-                    onAction({ command, node, lines });
+                    const nodes = nodesStr ? nodesStr.split(',').map(s => s.trim()) : undefined;
+
+                    onAction({ command, node, lines, name, color, nodes });
                 }
             });
 
@@ -103,7 +120,7 @@ export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction 
     };
 
     return (
-        <div className="flex flex-col h-full bg-card/50 backdrop-blur-sm border-l border-border/50">
+        <div className="flex flex-col h-full glass-panel border-l border-white/5 min-h-0">
             <div className="p-4 border-b border-border/50">
                 <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                     <Bot size={16} /> AI Chat
@@ -122,12 +139,22 @@ export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction 
                                 )}
                             </Avatar>
                             <div className={cn(
-                                "rounded-lg p-3 text-sm max-w-[80%]",
+                                "rounded-lg p-3 text-sm max-w-[85%] shadow-sm",
                                 msg.role === "user"
-                                    ? "bg-primary text-primary-foreground"
-                                    : "bg-muted/50 text-foreground border border-border/50"
+                                    ? "bg-primary text-primary-foreground ml-auto"
+                                    : "bg-card/40 text-foreground border border-border/50 backdrop-blur-md"
                             )}>
-                                {msg.content}
+                                {msg.role === "assistant" ? (
+                                    <div className="prose prose-sm prose-invert max-w-none space-y-3 prose-headings:text-primary prose-headings:font-bold prose-headings:mb-2 prose-p:leading-relaxed prose-p:mb-4 prose-code:text-primary prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded prose-pre:bg-muted/50 prose-pre:border prose-pre:border-border/50">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            {msg.content}
+                                        </ReactMarkdown>
+                                    </div>
+                                ) : (
+                                    <div className="whitespace-pre-wrap leading-relaxed">
+                                        {msg.content}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))}

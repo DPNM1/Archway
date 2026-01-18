@@ -16,6 +16,10 @@ export async function readFileContent(localPath: string, filePath: string) {
 export async function updateFileContent(localPath: string, filePath: string, content: string) {
     try {
         if (!localPath || !filePath) return { success: false };
+
+        // Simulate network/db delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         const success = await saveFileContent(localPath, filePath, content);
         return { success };
     } catch (e) {

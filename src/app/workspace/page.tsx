@@ -9,17 +9,23 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { analyzeRepository } from "@/app/actions/analyze";
 import { readFileContent } from "@/app/actions/file";
 import { generateProjectSummary } from "@/app/actions/ai";
+import { chatWithRepo, ChatMessage } from "../actions/ai";
+import { indexRepository } from "../actions/rag";
+import { createClient } from "@/lib/supabase/client";
 import { getRepoGraph } from "@/app/actions/graph";
+import { GuardrailsModal } from "@/components/features/graph/GuardrailsModal";
 import { ChatInterface } from "@/components/features/chat/ChatInterface";
 import { DependencyGraph } from "@/components/features/graph/DependencyGraph";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { FileNode } from "@/lib/file-system";
 import type { GraphData } from "@/lib/structure-parser";
-import { Loader2, Code, Share2, ChevronRight, ChevronLeft, MessageSquare } from "lucide-react";
+import { Loader2, Code, Share2, ChevronRight, ChevronLeft, MessageSquare, Database, Search } from "lucide-react";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { getLanguage } from '@/lib/languages';
 import { Node, Edge } from "@xyflow/react";
+import { NodeEditorModal } from "@/components/features/editor/NodeEditorModal";
+import { updateFileContent } from "@/app/actions/file";
 
 export default function WorkspacePage() {
     return (
@@ -50,7 +56,25 @@ function WorkspaceContent() {
     const [virtualNodes, setVirtualNodes] = useState<Node[]>([]);
     const [virtualEdges, setVirtualEdges] = useState<Edge[]>([]);
 
+    // Lifted Graph State
+    const [zones, setZones] = useState<Node[]>([]);
+    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+    // Explorer State
+    const [isExplorerCollapsed, setIsExplorerCollapsed] = useState(false);
+
+    // RAG State
+    const [isIndexing, setIsIndexing] = useState(false);
+    const [indexProgress, setIndexProgress] = useState(0);
+    const [repoId, setRepoId] = useState<string | null>(null);
+
+    // Editor Modal state
+    const [isEditorOpen, setIsEditorOpen] = useState(false);
+    const [editorNodePath, setEditorNodePath] = useState<string | null>(null);
+    const [editorContent, setEditorContent] = useState("");
+
     const handleAIVirtualNode = async (nodePath: string, lines: number[]) => {
+        // ... (existing logic)
         if (!localPath || !nodePath || lines.length === 0) return;
         try {
             const { content } = await readFileContent(localPath, nodePath.trim());
@@ -104,8 +128,36 @@ function WorkspaceContent() {
         }
     };
 
-    // Helper to load file content
-    const loadFile = async (path: string, currentLocalPath: string) => {
+    const handleCreateAIZone = (name: string, color: string, nodePaths: string[]) => {
+        if (!graphData) return;
+
+        // Find nodes to encompass
+        const targetNodes = graphData.nodes.filter(n => nodePaths.some(p => n.id.includes(p)));
+        if (targetNodes.length === 0) return;
+
+        // Calculate bounds (this is tricky without knowing rendered positions, 
+        // but we can estimate or use a default size around the first node)
+        // For now, let's create a zone around the first target node as a starting point
+        const targetNode = targetNodes[0];
+
+        const newZone: Node = {
+            id: `zone-${Date.now()}`,
+            type: 'zone',
+            position: { x: 0, y: 0 }, // DependencyGraph layout will handle zones if we sync them correctly, 
+            // but zones are usually manual. We'll give it a default.
+            data: {
+                label: name,
+                color: color || "#3b82f6",
+                width: 300,
+                height: 200
+            }
+        };
+
+        setZones(prev => [...prev, newZone]);
+        setActiveTab("graph");
+    };
+
+    const loadFile = useCallback(async (path: string, currentLocalPath: string) => {
         setSelectedFile(path);
         setContentLoading(true);
         try {
@@ -115,6 +167,60 @@ function WorkspaceContent() {
             setFileContent("// Error loading file");
         } finally {
             setContentLoading(false);
+        }
+    }, []);
+
+    const handleNodeClick = useCallback(async (nodeId: string) => {
+        if (!localPath) return;
+        // Just load file content to sidebar - modal opens only via pop-out button
+        loadFile(nodeId, localPath);
+    }, [localPath, loadFile]);
+
+    const handleEditorSave = useCallback(async (path: string, content: string) => {
+        if (!localPath) return false;
+        const result = await updateFileContent(localPath, path, content);
+        if (result.success) {
+            if (path === selectedFile) {
+                setFileContent(content);
+            }
+            return true;
+        }
+        return false;
+    }, [localPath, selectedFile]);
+
+    const handleOpenInModal = useCallback((filePath: string, content: string) => {
+        setEditorNodePath(filePath);
+        setEditorContent(content);
+        setIsEditorOpen(true);
+    }, []);
+
+    const handleVirtualNodeUpdate = useCallback((nodeId: string, newContent: string) => {
+        setVirtualNodes(prev => prev.map(node =>
+            node.id === nodeId
+                ? { ...node, data: { ...node.data, content: newContent } }
+                : node
+        ));
+    }, []);
+
+    const handleIndexRepo = async () => {
+        if (!localPath || !repoUrl) return;
+        setIsIndexing(true);
+        try {
+            const supabase = createClient();
+            const { data: repo } = await supabase.from("repositories").select("id").eq("url", repoUrl).single();
+            if (repo) {
+                const graphRes = await getRepoGraph(localPath, repoUrl || undefined);
+                const res = await indexRepository(localPath, repo.id);
+                if (res.success) {
+                    alert(`Successfully indexed ${res.count} chunks!`);
+                } else {
+                    alert(`Indexing failed: ${res.error}`);
+                }
+            }
+        } catch (e) {
+            console.error("Index Error:", e);
+        } finally {
+            setIsIndexing(false);
         }
     };
 
@@ -136,11 +242,20 @@ function WorkspaceContent() {
 
                     // Generate graph
                     if (result.localPath) {
-                        getRepoGraph(result.localPath).then(res => {
+                        getRepoGraph(result.localPath, repoUrl || undefined).then(res => {
                             if (res.success && res.data) setGraphData(res.data);
                         });
                     }
 
+                    // Fetch Repo ID for Guardrails
+                    const supabase = createClient();
+                    supabase.from("repositories")
+                        .select("id")
+                        .eq("url", repoUrl)
+                        .single()
+                        .then(({ data }) => {
+                            if (data) setRepoId(data.id);
+                        });
                 } else {
                     setError(result.message || "Failed to analyze repo");
                 }
@@ -195,14 +310,47 @@ function WorkspaceContent() {
             <div className={`flex gap-4 h-[calc(100vh-6rem)] overflow-hidden ${isResizing ? 'select-none' : ''}`}>
                 {/* Main Content Area (Explorer + Center) */}
                 <div className="flex-1 flex gap-4 overflow-hidden min-w-0">
-                    {/* Left Panel: File Explorer - Hidden when graph is maximized */}
+                    {/* Left Panel: File Explorer - Hidden when graph is maximized or collapsed */}
                     {!isGraphMaximized && (
-                        <div className="w-64 flex flex-col h-full animate-in fade-in slide-in-from-left duration-300 shrink-0">
-                            <Card className="h-full border-border/50 bg-card/50 backdrop-blur-sm flex flex-col">
-                                <div className="p-3 border-b border-border/50">
+                        <div className={`flex flex-col h-full animate-in fade-in slide-in-from-left duration-300 shrink-0 transition-all duration-300 ${isExplorerCollapsed ? 'w-0 opacity-0 pointer-events-none' : 'w-64'}`}>
+                            <Card className="h-full glass-panel flex flex-col relative overflow-visible min-h-0">
+                                {/* Collapse Button */}
+                                <button
+                                    onClick={() => setIsExplorerCollapsed(true)}
+                                    className="absolute -right-3 top-10 z-10 w-6 h-6 bg-background border border-border rounded-full flex items-center justify-center hover:bg-muted transition-colors shadow-sm"
+                                    title="Collapse Explorer"
+                                >
+                                    <ChevronLeft size={12} />
+                                </button>
+
+                                <div className="p-3 border-b border-border/50 flex items-center justify-between">
                                     <h2 className="font-semibold text-[10px] text-muted-foreground uppercase tracking-widest">
                                         {loading ? "Scanning..." : (error ? "Error" : "Explorer")}
                                     </h2>
+                                    <div className="flex items-center gap-1">
+                                        {repoId && (
+                                            <GuardrailsModal
+                                                repoId={repoId}
+                                                onRulesChange={() => {
+                                                    // Refresh graph to show violations
+                                                    if (localPath) {
+                                                        getRepoGraph(localPath, repoUrl || undefined).then(res => {
+                                                            if (res.success && res.data) setGraphData(res.data);
+                                                        });
+                                                    }
+                                                }}
+                                            />
+                                        )}
+                                        <button
+                                            onClick={handleIndexRepo}
+                                            disabled={isIndexing || loading}
+                                            className="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 hover:bg-primary/20 text-primary transition-colors disabled:opacity-50"
+                                            title="Build semantic index for RAG search"
+                                        >
+                                            {isIndexing ? <Loader2 size={10} className="animate-spin" /> : <Database size={10} />}
+                                            {isIndexing ? "Indexing..." : "Index"}
+                                        </button>
+                                    </div>
                                 </div>
                                 <ScrollArea className="flex-1 p-2">
                                     {loading ? (
@@ -229,6 +377,17 @@ function WorkspaceContent() {
                         </div>
                     )}
 
+                    {/* Explorer Expand Trigger */}
+                    {isExplorerCollapsed && !isGraphMaximized && (
+                        <button
+                            onClick={() => setIsExplorerCollapsed(false)}
+                            className="w-10 h-full border-r border-border/50 bg-card/10 hover:bg-card/30 flex items-center justify-center transition-all group shrink-0"
+                            title="Expand Explorer"
+                        >
+                            <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                        </button>
+                    )}
+
                     {/* Center Panel: Code Viewer & Graph */}
                     <div className="flex-1 flex flex-col h-full min-w-0 transition-all duration-300">
                         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
@@ -240,9 +399,9 @@ function WorkspaceContent() {
                             </div>
 
                             <TabsContent value="code" className="flex-1 m-0 h-full overflow-hidden">
-                                <Card className="h-full border-border/50 bg-card/20 backdrop-blur-sm flex flex-col overflow-hidden">
-                                    <div className="p-2 border-b border-border/50 bg-muted/10 flex items-center justify-between">
-                                        <span className="text-[11px] font-medium truncate opacity-70">{selectedFile || "No file selected"}</span>
+                                <Card className="h-full glass-panel flex flex-col overflow-hidden">
+                                    <div className="p-2 border-b border-white/5 bg-white/5 flex items-center justify-between">
+                                        <span className="text-[11px] font-medium truncate opacity-70 text-primary">{selectedFile || "No file selected"}</span>
                                     </div>
                                     <div className="flex-1 overflow-auto bg-[#0d0d0d]">
                                         {contentLoading ? (
@@ -276,7 +435,7 @@ function WorkspaceContent() {
                             </TabsContent>
 
                             <TabsContent value="graph" className="flex-1 m-0 h-full overflow-hidden">
-                                <Card className="h-full border-border/50 bg-card/10 backdrop-blur-sm flex flex-col overflow-hidden p-0 relative">
+                                <Card className="h-full glass-panel flex flex-col overflow-hidden p-0 relative">
                                     {graphData ? (
                                         <DependencyGraph
                                             data={graphData}
@@ -293,11 +452,14 @@ function WorkspaceContent() {
                                             virtualEdges={virtualEdges}
                                             onVirtualNodesChange={setVirtualNodes}
                                             onVirtualEdgesChange={setVirtualEdges}
-                                            onNodeClick={(nodeId: string) => {
-                                                if (localPath) {
-                                                    loadFile(nodeId, localPath);
-                                                }
-                                            }}
+                                            onNodeClick={handleNodeClick}
+                                            onOpenInModal={handleOpenInModal}
+                                            onVirtualNodeUpdate={handleVirtualNodeUpdate}
+                                            // Lifted states
+                                            zones={zones}
+                                            onZonesChange={setZones}
+                                            expandedIds={expandedIds}
+                                            onExpandedIdsChange={setExpandedIds}
                                         />
                                     ) : (
                                         <div className="flex items-center justify-center h-full text-muted-foreground text-xs">
@@ -344,15 +506,51 @@ function WorkspaceContent() {
                     >
                         <ChatInterface
                             fileTree={tree}
-                            currentFileContent={selectedFile && !contentLoading ? fileContent : undefined}
+                            currentFileContent={fileContent}
                             repoUrl={repoUrl}
+                            graphNodes={graphData?.nodes}
                             onAction={(action) => {
-                                if (action.command === 'focus') {
+                                if (action.command === 'focus' && action.node) {
                                     setHighlightedNodeId(action.node);
                                     setHighlightedLines(action.lines || []);
                                     setActiveTab("graph");
-                                } else if (action.command === 'split' && action.lines && action.lines.length > 0) {
+                                } else if (action.command === 'split' && action.node && action.lines && action.lines.length > 0) {
                                     handleAIVirtualNode(action.node, action.lines);
+                                } else if (action.command === 'navigate' && action.node) {
+                                    // Find node in tree to determine if it's a file or directory
+                                    const findNode = (nodes: FileNode[], path: string): FileNode | null => {
+                                        for (const node of nodes) {
+                                            if (node.path === path) return node;
+                                            if (node.children) {
+                                                const found = findNode(node.children, path);
+                                                if (found) return found;
+                                            }
+                                        }
+                                        return null;
+                                    };
+
+                                    const targetNode = findNode(tree, action.node);
+                                    if (targetNode) {
+                                        if (targetNode.type === 'file') {
+                                            if (localPath) loadFile(targetNode.path, localPath);
+                                            setActiveTab("code");
+                                        } else {
+                                            setExpandedIds(prev => new Set([...prev, targetNode.path]));
+                                            setActiveTab("graph");
+                                        }
+                                    } else {
+                                        // Fallback if node not found (maybe truncated or external)
+                                        const isFileFallback = action.node.includes('.');
+                                        if (isFileFallback) {
+                                            if (localPath) loadFile(action.node, localPath);
+                                            setActiveTab("code");
+                                        } else {
+                                            setExpandedIds(prev => new Set([...prev, action.node!]));
+                                            setActiveTab("graph");
+                                        }
+                                    }
+                                } else if (action.command === 'createZone' && action.name && action.nodes) {
+                                    handleCreateAIZone(action.name, action.color || "#3b82f6", action.nodes);
                                 }
                             }}
                         />
@@ -367,6 +565,17 @@ function WorkspaceContent() {
                     >
                         <MessageSquare size={20} />
                     </button>
+                )}
+
+                {/* Mini IDE Modal */}
+                {isEditorOpen && editorNodePath && (
+                    <NodeEditorModal
+                        isOpen={isEditorOpen}
+                        onClose={() => setIsEditorOpen(false)}
+                        filePath={editorNodePath}
+                        initialContent={editorContent}
+                        onSave={handleEditorSave}
+                    />
                 )}
             </div>
         </AppLayout>

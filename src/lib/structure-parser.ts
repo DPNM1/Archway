@@ -1,16 +1,28 @@
 import type { FileNode } from "./file-system";
 
+export interface MetricData {
+    complexity: number;  // Normalized 0-1, derived from LOC and nesting depth
+    coupling: number;    // Normalized 0-1, inbound + outbound dependencies
+    size: number;        // Normalized 0-1, file size
+    rawSize: number;     // Actual bytes
+    rawLOC: number;      // Lines of code
+}
+
 export interface GraphNode {
     id: string;
     label: string;
     type: "dir" | "file";
     parentId?: string;
+    metrics?: MetricData;
 }
 
 export interface GraphEdge {
     id: string;
     source: string;
     target: string;
+    data?: any;
+    animated?: boolean;
+    style?: any;
 }
 
 export interface GraphData {
