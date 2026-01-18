@@ -516,7 +516,10 @@ const FileCodeNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                                     onClick={(e: React.MouseEvent) => {
                                         e.stopPropagation();
                                         if (data.onOpenInModal) {
-                                            data.onOpenInModal(data.id, editedContent);
+                                            // Explicitly pass data.id (file path) and current content
+                                            data.onOpenInModal(data.id, editedContent || content);
+                                        } else {
+                                            console.warn("onOpenInModal is not defined for node:", data.id);
                                         }
                                     }}
                                     className="p-1 hover:bg-white/10 rounded text-muted-foreground transition-colors"
@@ -1048,11 +1051,24 @@ function DependencyGraphContent({
                             return next;
                         });
                     } else {
-                        toggleCodeExpansion(node.id);
+                        // File node toggle logic if needed
+                        if (codeExpandedIds.has(node.id)) {
+                            setCodeExpandedIds(prev => {
+                                const next = new Set(prev);
+                                next.delete(node.id);
+                                return next;
+                            });
+                        } else {
+                            setCodeExpandedIds(prev => new Set(prev).add(node.id));
+                        }
                     }
                 },
-                onSplit: handleSplit,
-                onOpenInModal: onOpenInModal
+                onOpenInModal: onOpenInModal, // Pass the callback here
+                onSplit: (parentId: string, range: string, sliceContent: string) => {
+                    // Logic for virtual node creation
+                    handleSplit(parentId, range, sliceContent);
+                },
+                onUpdateContent: onVirtualNodeUpdate
             }
         }));
 

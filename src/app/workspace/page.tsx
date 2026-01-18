@@ -314,71 +314,69 @@ function WorkspaceContent() {
                 {/* Main Content Area (Explorer + Center) */}
                 <div className="flex-1 flex gap-4 overflow-hidden min-w-0">
                     {/* Left Panel: File Explorer - Hidden when graph is maximized or collapsed */}
-                    {!isGraphMaximized && (
-                        <div className={`flex flex-col h-full animate-in fade-in slide-in-from-left duration-300 shrink-0 transition-all duration-300 ${isExplorerCollapsed ? 'w-0 opacity-0 pointer-events-none' : 'w-64'}`}>
-                            <Card className="h-full glass-panel flex flex-col relative overflow-visible min-h-0">
-                                {/* Collapse Button */}
-                                <button
-                                    onClick={() => setIsExplorerCollapsed(true)}
-                                    className="absolute -right-3 top-10 z-10 w-6 h-6 bg-background border border-border rounded-full flex items-center justify-center hover:bg-muted transition-colors shadow-sm"
-                                    title="Collapse Explorer"
-                                >
-                                    <ChevronLeft size={12} />
-                                </button>
+                    <div className={`flex flex-col h-full animate-in fade-in slide-in-from-left duration-300 shrink-0 transition-all duration-300 ${isExplorerCollapsed || isGraphMaximized ? 'w-0 opacity-0 pointer-events-none' : 'w-64'}`}>
+                        <Card className="h-full glass-panel flex flex-col relative overflow-visible min-h-0">
+                            {/* Collapse Button */}
+                            <button
+                                onClick={() => setIsExplorerCollapsed(true)}
+                                className="absolute -right-3 top-10 z-10 w-6 h-6 bg-background border border-border rounded-full flex items-center justify-center hover:bg-muted transition-colors shadow-sm"
+                                title="Collapse Explorer"
+                            >
+                                <ChevronLeft size={12} />
+                            </button>
 
-                                <div className="p-3 border-b border-border/50 flex items-center justify-between">
-                                    <h2 className="font-semibold text-[10px] text-muted-foreground uppercase tracking-widest">
-                                        {loading ? "Scanning..." : (error ? "Error" : "Explorer")}
-                                    </h2>
-                                    <div className="flex items-center gap-1">
-                                        {repoId && (
-                                            <GuardrailsModal
-                                                repoId={repoId}
-                                                onRulesChange={() => {
-                                                    // Refresh graph to show violations
-                                                    if (localPath) {
-                                                        getRepoGraph(localPath, repoUrl || undefined).then(res => {
-                                                            if (res.success && res.data) setGraphData(res.data);
-                                                        });
-                                                    }
-                                                }}
-                                            />
-                                        )}
-                                        <button
-                                            onClick={handleIndexRepo}
-                                            disabled={isIndexing || loading}
-                                            className="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 hover:bg-primary/20 text-primary transition-colors disabled:opacity-50"
-                                            title="Build semantic index for RAG search"
-                                        >
-                                            {isIndexing ? <Loader2 size={10} className="animate-spin" /> : <Database size={10} />}
-                                            {isIndexing ? "Indexing..." : "Index"}
-                                        </button>
-                                    </div>
-                                </div>
-                                <ScrollArea className="flex-1 p-2">
-                                    {loading ? (
-                                        <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
-                                            <Loader2 className="animate-spin" size={16} />
-                                            <span className="text-[10px]">Cloning...</span>
-                                        </div>
-                                    ) : error ? (
-                                        <div className="p-4 text-red-400 text-xs text-center">{error}</div>
-                                    ) : (
-                                        <FileTree
-                                            data={tree}
-                                            onSelect={(path) => {
+                            <div className="p-3 border-b border-border/50 flex items-center justify-between">
+                                <h2 className="font-semibold text-[10px] text-muted-foreground uppercase tracking-widest">
+                                    {loading ? "Scanning..." : (error ? "Error" : "Explorer")}
+                                </h2>
+                                <div className="flex items-center gap-1">
+                                    {repoId && (
+                                        <GuardrailsModal
+                                            repoId={repoId}
+                                            onRulesChange={() => {
+                                                // Refresh graph to show violations
                                                 if (localPath) {
-                                                    loadFile(path, localPath);
-                                                    setActiveTab("code");
+                                                    getRepoGraph(localPath, repoUrl || undefined).then(res => {
+                                                        if (res.success && res.data) setGraphData(res.data);
+                                                    });
                                                 }
                                             }}
-                                            selectedPath={selectedFile || ""}
                                         />
                                     )}
-                                </ScrollArea>
-                            </Card>
-                        </div>
-                    )}
+                                    <button
+                                        onClick={handleIndexRepo}
+                                        disabled={isIndexing || loading}
+                                        className="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 hover:bg-primary/20 text-primary transition-colors disabled:opacity-50"
+                                        title="Build semantic index for RAG search"
+                                    >
+                                        {isIndexing ? <Loader2 size={10} className="animate-spin" /> : <Database size={10} />}
+                                        {isIndexing ? "Indexing..." : "Index"}
+                                    </button>
+                                </div>
+                            </div>
+                            <ScrollArea className="flex-1 p-2">
+                                {loading ? (
+                                    <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+                                        <Loader2 className="animate-spin" size={16} />
+                                        <span className="text-[10px]">Cloning...</span>
+                                    </div>
+                                ) : error ? (
+                                    <div className="p-4 text-red-400 text-xs text-center">{error}</div>
+                                ) : (
+                                    <FileTree
+                                        data={tree}
+                                        onSelect={(path) => {
+                                            if (localPath) {
+                                                loadFile(path, localPath);
+                                                setActiveTab("code");
+                                            }
+                                        }}
+                                        selectedPath={selectedFile || ""}
+                                    />
+                                )}
+                            </ScrollArea>
+                        </Card>
+                    </div>
 
                     {/* Explorer Expand Trigger */}
                     {isExplorerCollapsed && !isGraphMaximized && (
