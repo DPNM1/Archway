@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,18 @@ export function LoginDialog({ isOpen, onOpenChange }: LoginDialogProps) {
     const [message, setMessage] = useState<string | null>(null);
     const supabase = createClient();
 
+    // Debugging Env Vars
+    useEffect(() => {
+        console.log("--- Supabase Client Debug ---");
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        console.log("Is Supabase URL defined?", !!url);
+        console.log("Supabase URL:", url);
+        console.log("Is Anon Key defined?", !!key);
+        console.log("Anon Key Length:", key ? key.length : 0);
+        console.log("-----------------------------");
+    }, []);
+
     const handleGithubLogin = async () => {
         setLoading(true);
         const { error } = await supabase.auth.signInWithOAuth({
@@ -40,13 +52,18 @@ export function LoginDialog({ isOpen, onOpenChange }: LoginDialogProps) {
         e.preventDefault();
         if (!email) return;
         setLoading(true);
+        console.log("Attempting login with:", email);
+        console.log("Redirect URL:", `${window.location.origin}/auth/callback`);
+
         const { error } = await supabase.auth.signInWithOtp({
             email,
             options: {
                 emailRedirectTo: `${window.location.origin}/auth/callback`,
             },
         });
+
         if (error) {
+            console.error("Auth Error:", error);
             setMessage(error.message);
         } else {
             setMessage("Check your email for the login link!");
