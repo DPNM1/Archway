@@ -82,32 +82,41 @@ const ZoneNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
                 stiffness: 300,
                 damping: 30,
             }}
-            className="glass-panel node-transition rounded-lg border-2 border-dashed flex flex-col relative group overflow-hidden"
+            className="rounded-xl border-2 border-dashed flex flex-col relative group overflow-hidden shadow-sm hover:shadow-md transition-all"
             style={{
                 width: data.width,
                 height: data.height,
-                backgroundColor: `${data.color}20`, // 20% opacity
-                borderColor: data.color,
+                minWidth: 100,
+                minHeight: 100,
+                backgroundColor: `${data.color || '#3b82f6'}15`, // 15% opacity
+                borderColor: data.color || '#3b82f6',
             }}
         >
             <div
-                className="w-full h-8 px-2 flex items-center justify-between border-b border-white/10 shrink-0"
-                style={{ backgroundColor: `${data.color}40` }}
+                className="w-full h-9 px-3 flex items-center justify-between border-b border-white/5 shrink-0 backdrop-blur-sm"
+                style={{ backgroundColor: `${data.color || '#3b82f6'}80` }}
             >
-                <span className="text-xs font-bold text-white drop-shadow-md truncate max-w-[80%]">{data.label}</span>
+                <span className="text-sm font-bold text-white drop-shadow-md truncate max-w-[80%] tracking-tight">
+                    {data.label || "Untitled Zone"}
+                </span>
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
-                        if (data.onDelete) data.onDelete(data.id);
+                        // Call delete handler
+                        if (data.onDelete) {
+                            data.onDelete(data.id);
+                        } else {
+                            console.warn("No onDelete handler for zone", data.id);
+                        }
                     }}
-                    className="text-white/80 hover:text-red-400 transition-colors p-1 hover:bg-black/20 rounded"
+                    className="flex items-center justify-center h-6 w-6 rounded-full bg-black/20 text-white/90 hover:bg-black/40 hover:text-red-400 transition-all pointer-events-auto"
                     title="Delete Zone"
                 >
-                    <Trash2 size={12} />
+                    <Trash2 size={14} />
                 </button>
             </div>
             {/* Clickable background for drag */}
-            <div className="w-full flex-1" />
+            <div className="w-full flex-1 touch-none" />
         </motion.div>
     );
 };
@@ -880,7 +889,6 @@ function DependencyGraphContent({
                 label: zoneName,
                 width: pendingZone.width,
                 height: pendingZone.height,
-                color: zoneColor,
                 color: zoneColor,
                 onDelete: (id: string) => {
                     setZones((prev: Node[]) => prev.filter((z) => z.id !== id));
