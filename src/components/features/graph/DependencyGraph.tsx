@@ -17,6 +17,7 @@ import { metricToHSL } from '@/lib/heatmap-utils';
 import { getLanguage, getLanguageMetadata } from '@/lib/languages';
 import Editor from '@monaco-editor/react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { ChatMessage } from '@/app/actions/ai';
 import { ChatInterface } from '../chat/ChatInterface';
 
 interface StructureGraphProps {
@@ -39,6 +40,11 @@ interface StructureGraphProps {
     onZonesChange?: (zones: Node[] | ((prev: Node[]) => Node[])) => void;
     expandedIds?: Set<string>;
     onExpandedIdsChange?: (ids: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
+    chatProps?: {
+        messages: ChatMessage[];
+        isLoading: boolean;
+        onSendMessage: (content: string) => Promise<void>;
+    };
 }
 
 interface CustomNodeData {
@@ -824,7 +830,8 @@ function DependencyGraphContent({
     zones: propsZones,
     onZonesChange,
     expandedIds: propsExpandedIds,
-    onExpandedIdsChange
+    onExpandedIdsChange,
+    chatProps
 }: StructureGraphProps) {
     const { fitView, screenToFlowPosition } = useReactFlow();
 
@@ -1335,10 +1342,9 @@ function DependencyGraphContent({
                                     messages={chatProps.messages}
                                     isLoading={chatProps.isLoading}
                                     onSendMessage={chatProps.onSendMessage}
-                                    onDragStart={() => { }} // No-op as we use container drag if needed, or just fixed
-                                    currentFile={null} // Context agnostic or pass global
-                                    onCodeBlockClick={() => { }} // Handle if needed
+                                    fileTree={[]} // Empty or pass global if available
                                 />
+
                             </div>
                         </motion.div>
                     )}

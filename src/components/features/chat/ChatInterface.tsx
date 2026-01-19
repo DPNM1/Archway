@@ -27,33 +27,53 @@ interface ChatInterfaceProps {
         nodes?: string[]
     }) => void;
     graphNodes?: GraphNode[];
+    // External state control
+    messages?: ChatMessage[];
+    isLoading?: boolean;
+    onSendMessage?: (content: string) => Promise<void>;
 }
 
-export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction, graphNodes }: ChatInterfaceProps) {
-    const [messages, setMessages] = useState<ChatMessage[]>([
+export function ChatInterface({
+    fileTree,
+    currentFileContent,
+    repoUrl,
+    onAction,
+    graphNodes,
+    messages: externalMessages,
+    isLoading: externalIsLoading,
+    onSendMessage
+}: ChatInterfaceProps) {
+    const [internalMessages, setInternalMessages] = useState<ChatMessage[]>([
         { role: "assistant", content: "Hi! I'm Archway AI. Ask me anything about this codebase." }
     ]);
-    const [input, setInput] = useState("");
-    const [loading, setLoading] = useState(false);
+    const [internalInput, setInternalInput] = useState("");
+    const [internalLoading, setInternalLoading] = useState(false);
+
+    // Derived state
+    const messages = externalMessages || internalMessages;
+    const loading = externalIsLoading !== undefined ? externalIsLoading : internalLoading;
+    const input = internalInput; // We can keep input internal as it's just the text box
+    const setInput = setInternalInput;
+
     const scrollRef = useRef<HTMLDivElement>(null);
 
-    // Load chat history on mount
+    // Load chat history on mount (ONLY if internal)
     useEffect(() => {
-        if (repoUrl) {
+        if (repoUrl && !externalMessages) {
             loadChat(repoUrl).then(res => {
                 if (res.success && res.messages && res.messages.length > 0) {
-                    setMessages(res.messages);
+                    setInternalMessages(res.messages);
                 }
             });
         }
-    }, [repoUrl]);
+    }, [repoUrl, externalMessages]);
 
-    // Save chat history when messages change
+    // Save chat history when messages change (persisted by parent if external, or here if internal)
     const persistChat = useCallback(async (newMessages: ChatMessage[]) => {
-        if (repoUrl && newMessages.length > 0) {
+        if (repoUrl && newMessages.length > 0 && !externalMessages) {
             await saveChat(repoUrl, newMessages);
         }
-    }, [repoUrl]);
+    }, [repoUrl, externalMessages]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -64,11 +84,20 @@ export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction,
     const handleSend = async () => {
         if (!input.trim() || loading) return;
 
+        // Use external handler if provided
+        if (onSendMessage) {
+            const content = input;
+            setInput("");
+            await onSendMessage(content);
+            return;
+        }
+
+        // Fallback to internal logic
         const userMsg: ChatMessage = { role: "user", content: input };
         const updatedMessages = [...messages, userMsg];
-        setMessages(updatedMessages);
+        setInternalMessages(updatedMessages);
         setInput("");
-        setLoading(true);
+        setInternalLoading(true);
 
         try {
             const response = await chatWithRepo(updatedMessages, fileTree, currentFileContent, repoUrl || undefined, graphNodes);
@@ -110,12 +139,12 @@ export function ChatInterface({ fileTree, currentFileContent, repoUrl, onAction,
 
             const aiMsg: ChatMessage = { role: "assistant", content: cleanContent };
             const finalMessages = [...updatedMessages, aiMsg];
-            setMessages(finalMessages);
+            setInternalMessages(finalMessages);
             persistChat(finalMessages); // Save after AI response
         } catch (e) {
-            setMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong." }]);
+            setInternalMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong." }]);
         } finally {
-            setLoading(false);
+            setInternalLoading(false);
         }
     };
 

@@ -73,6 +73,126 @@ function WorkspaceContent() {
     const [editorNodePath, setEditorNodePath] = useState<string | null>(null);
     const [editorContent, setEditorContent] = useState("");
 
+
+    // Hoisted Chat State
+    const [messages, setMessages] = useState<ChatMessage[]>([
+        { role: "assistant", content: "Hi! I'm Archway AI. Ask me anything about this codebase." }
+    ]);
+    const [isChatLoading, setIsChatLoading] = useState(false);
+
+    // Initial chat load
+    useEffect(() => {
+        if (repoUrl) {
+            import("@/app/actions/chat-persistence").then(({ loadChat }) => {
+                loadChat(repoUrl).then(res => {
+                    if (res.success && res.messages && res.messages.length > 0) {
+                        setMessages(res.messages);
+                    }
+                });
+            });
+        }
+    }, [repoUrl]);
+
+    const handleSendMessage = async (content: string) => {
+        if (!content.trim() || isChatLoading) return;
+
+        const userMsg: ChatMessage = { role: "user", content };
+        const updatedMessages = [...messages, userMsg];
+        setMessages(updatedMessages);
+        setIsChatLoading(true);
+
+        try {
+            const response = await chatWithRepo(updatedMessages, tree, fileContent, repoUrl || undefined, graphData?.nodes);
+
+            // Parse for actions
+            const actionRegex = /<ArchwayAction\s+([^>]+)\/?>/gi;
+            const matches = Array.from(response.matchAll(actionRegex));
+
+            matches.forEach(match => {
+                const attrStr = match[1];
+                const command = attrStr.match(/command=["']([^"']+)["']/i)?.[1] || "";
+                const node = attrStr.match(/node=["']([^"']+)["']/i)?.[1];
+                const linesStr = attrStr.match(/lines=["']([^"']+)["']/i)?.[1];
+                const name = attrStr.match(/name=["']([^"']+)["']/i)?.[1];
+                const color = attrStr.match(/color=["']([^"']+)["']/i)?.[1];
+                const nodesStr = attrStr.match(/nodes=["']([^"']+)["']/i)?.[1];
+
+                let lines: number[] = [];
+                if (linesStr) {
+                    linesStr.split(',').forEach(part => {
+                        if (part.includes('-')) {
+                            const [start, end] = part.split('-').map(Number);
+                            for (let i = start; i <= end; i++) lines.push(i);
+                        } else {
+                            lines.push(Number(part));
+                        }
+                    });
+                }
+                const nodes = nodesStr ? nodesStr.split(',').map(s => s.trim()) : undefined;
+
+                // Execute Action directly
+                if (command === 'focus' && node) {
+                    setHighlightedNodeId(node);
+                    setHighlightedLines(lines || []);
+                    setActiveTab("graph");
+                } else if (command === 'split' && node && lines && lines.length > 0) {
+                    handleAIVirtualNode(node, lines);
+                } else if (command === 'navigate' && node) {
+                    const findNode = (nodes: FileNode[], path: string): FileNode | null => {
+                        for (const n of nodes) {
+                            if (n.path === path) return n;
+                            if (n.children) {
+                                const found = findNode(n.children, path);
+                                if (found) return found;
+                            }
+                        }
+                        return null;
+                    };
+                    const targetNode = findNode(tree, node);
+                    if (targetNode) {
+                        if (targetNode.type === 'file') {
+                            if (localPath) loadFile(targetNode.path, localPath);
+                            setActiveTab("code");
+                        } else {
+                            setExpandedIds(prev => new Set([...prev, targetNode.path]));
+                            setActiveTab("graph");
+                        }
+                    } else {
+                        const isFileFallback = node.includes('.');
+                        if (isFileFallback) {
+                            if (localPath) loadFile(node, localPath);
+                            setActiveTab("code");
+                        } else {
+                            setExpandedIds(prev => new Set([...prev, node]));
+                            setActiveTab("graph");
+                        }
+                    }
+                } else if (command === 'createZone' && name && nodes) {
+                    handleCreateAIZone(name, color || "#3b82f6", nodes);
+                }
+            });
+
+            // Clean response
+            const cleanContent = response.replace(/<ArchwayAction[^>]*\/?>/gi, "").trim();
+            const aiMsg: ChatMessage = { role: "assistant", content: cleanContent };
+            const finalMessages = [...updatedMessages, aiMsg];
+            setMessages(finalMessages);
+
+            // Persist
+            if (repoUrl) {
+                import("@/app/actions/chat-persistence").then(({ saveChat }) => {
+                    saveChat(repoUrl, finalMessages);
+                });
+            }
+
+        } catch (e) {
+            console.error(e);
+            setMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong." }]);
+        } finally {
+            setIsChatLoading(false);
+        }
+    };
+
     const handleAIVirtualNode = async (nodePath: string, lines: number[]) => {
         // ... (existing logic)
         if (!localPath || !nodePath || lines.length === 0) return;
@@ -463,7 +583,7 @@ function WorkspaceContent() {
                                             onExpandedIdsChange={setExpandedIds}
                                             chatProps={{
                                                 messages,
-                                                isLoading,
+                                                isLoading: isChatLoading,
                                                 onSendMessage: handleSendMessage
                                             }}
                                         />
@@ -515,50 +635,9 @@ function WorkspaceContent() {
                             currentFileContent={fileContent}
                             repoUrl={repoUrl}
                             graphNodes={graphData?.nodes}
-                            onAction={(action) => {
-                                if (action.command === 'focus' && action.node) {
-                                    setHighlightedNodeId(action.node);
-                                    setHighlightedLines(action.lines || []);
-                                    setActiveTab("graph");
-                                } else if (action.command === 'split' && action.node && action.lines && action.lines.length > 0) {
-                                    handleAIVirtualNode(action.node, action.lines);
-                                } else if (action.command === 'navigate' && action.node) {
-                                    // Find node in tree to determine if it's a file or directory
-                                    const findNode = (nodes: FileNode[], path: string): FileNode | null => {
-                                        for (const node of nodes) {
-                                            if (node.path === path) return node;
-                                            if (node.children) {
-                                                const found = findNode(node.children, path);
-                                                if (found) return found;
-                                            }
-                                        }
-                                        return null;
-                                    };
-
-                                    const targetNode = findNode(tree, action.node);
-                                    if (targetNode) {
-                                        if (targetNode.type === 'file') {
-                                            if (localPath) loadFile(targetNode.path, localPath);
-                                            setActiveTab("code");
-                                        } else {
-                                            setExpandedIds(prev => new Set([...prev, targetNode.path]));
-                                            setActiveTab("graph");
-                                        }
-                                    } else {
-                                        // Fallback if node not found (maybe truncated or external)
-                                        const isFileFallback = action.node.includes('.');
-                                        if (isFileFallback) {
-                                            if (localPath) loadFile(action.node, localPath);
-                                            setActiveTab("code");
-                                        } else {
-                                            setExpandedIds(prev => new Set([...prev, action.node!]));
-                                            setActiveTab("graph");
-                                        }
-                                    }
-                                } else if (action.command === 'createZone' && action.name && action.nodes) {
-                                    handleCreateAIZone(action.name, action.color || "#3b82f6", action.nodes);
-                                }
-                            }}
+                            messages={messages}
+                            isLoading={isChatLoading}
+                            onSendMessage={handleSendMessage}
                         />
                     </div>
                 )}
