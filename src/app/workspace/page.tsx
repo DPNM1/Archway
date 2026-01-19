@@ -461,6 +461,11 @@ function WorkspaceContent() {
                                             onZonesChange={setZones}
                                             expandedIds={expandedIds}
                                             onExpandedIdsChange={setExpandedIds}
+                                            chatProps={{
+                                                messages,
+                                                isLoading,
+                                                onSendMessage: handleSendMessage
+                                            }}
                                         />
                                     ) : (
                                         <div className="flex items-center justify-center h-full text-muted-foreground text-xs">

@@ -5,7 +5,7 @@ import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState,
 import dagre from 'dagre';
 import '@xyflow/react/dist/style.css';
 import type { GraphData, GraphNode, MetricData } from '@/lib/structure-parser';
-import { Folder, File, Maximize2, Minimize2, ChevronRight, X, Pencil, Check, RotateCcw, Scissors, ExternalLink, Square, Palette, Plus, Trash2, Activity } from "lucide-react";
+import { Folder, File, Maximize2, Minimize2, ChevronRight, X, Pencil, Check, RotateCcw, Scissors, ExternalLink, Square, Palette, Plus, Trash2, Activity, MessageSquare, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { readFileContent, updateFileContent } from '@/app/actions/file';
@@ -17,6 +17,7 @@ import { metricToHSL } from '@/lib/heatmap-utils';
 import { getLanguage, getLanguageMetadata } from '@/lib/languages';
 import Editor from '@monaco-editor/react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { ChatInterface } from '../chat/ChatInterface';
 
 interface StructureGraphProps {
     data: GraphData;
@@ -120,6 +121,36 @@ const ZoneNode = ({ data }: NodeProps<Node<CustomNodeData>>) => {
         </motion.div>
     );
 };
+
+// --- THEMES ---
+const GRAPH_THEMES = {
+    cyberpunk: {
+        label: "Cyberpunk",
+        bg: "#050505",
+        grid: "#222",
+        nodeBg: "rgba(10,10,12,0.6)",
+        nodeBorder: "rgba(255,255,255,0.15)",
+        edge: "#555"
+    },
+    blueprint: {
+        label: "Blueprint",
+        bg: "#1a2c4e",
+        grid: "rgba(255,255,255,0.1)",
+        nodeBg: "rgba(255,255,255,0.1)",
+        nodeBorder: "rgba(255,255,255,0.3)",
+        edge: "rgba(255,255,255,0.4)"
+    },
+    minimal: {
+        label: "Minimal",
+        bg: "#ffffff",
+        grid: "#eee",
+        nodeBg: "#fff",
+        nodeBorder: "#ddd",
+        edge: "#ccc"
+    }
+};
+
+type GraphTheme = keyof typeof GRAPH_THEMES;
 
 // Border Beam Component for sophisticated edges
 const BorderBeam = () => (
@@ -818,6 +849,10 @@ function DependencyGraphContent({
     const [zoneName, setZoneName] = useState("");
     const [zoneColor, setZoneColor] = useState("#3b82f6");
 
+    // Theme state
+    const [currentTheme, setCurrentTheme] = useState<GraphTheme>('cyberpunk');
+    const [isFloatingChatOpen, setIsFloatingChatOpen] = useState(false);
+
     // Heatmap mode state
     const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('off');
 
@@ -1093,13 +1128,16 @@ function DependencyGraphContent({
             source: edge.source,
             target: edge.target,
             animated: false,
-            style: { stroke: 'var(--foreground)', strokeWidth: 1.5 },
+            style: {
+                stroke: GRAPH_THEMES[currentTheme].edge,
+                strokeWidth: 1.5
+            },
             type: 'smoothstep'
         })), ...virtualEdges];
 
         const layNodes = getLayoutedElements(allNodes, allEdges);
         return { nodes: layNodes, edges: allEdges };
-    }, [data, expandedIds, codeExpandedIds, localPath, toggleCodeExpansion, virtualNodes, virtualEdges, handleSplit, highlightedId, highlightedLines, heatmapMode]);
+    }, [data, expandedIds, codeExpandedIds, localPath, toggleCodeExpansion, virtualNodes, virtualEdges, handleSplit, highlightedId, highlightedLines, heatmapMode, currentTheme]);
 
     const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes as Node[]);
     const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
@@ -1130,12 +1168,41 @@ function DependencyGraphContent({
         }
     }, [data.nodes, onNodeClick, toggleCodeExpansion, codeExpandedIds]);
 
+    const themeStyles = GRAPH_THEMES[currentTheme];
+
     return (
-        <div className={`bg-background border border-border/50 overflow-hidden text-foreground flex flex-col transition-all duration-300 w-full h-full relative ${isMaximized ? "shadow-2xl" : "rounded-lg"}`}>
-            <div className="p-3 border-b border-border/50 bg-muted/10 flex items-center justify-between shrink-0">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Repository Structure Graph</span>
+        <div
+            className={`overflow-hidden flex flex-col transition-all duration-300 w-full h-full relative ${isMaximized ? "shadow-2xl" : "rounded-lg"}`}
+            style={{
+                backgroundColor: themeStyles.bg,
+                borderColor: 'rgba(255,255,255,0.1)',
+                borderWidth: '1px'
+            }}
+        >
+            <div className="p-3 border-b flex items-center justify-between shrink-0" style={{ borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(255,255,255,0.02)' }}>
+                <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold uppercase tracking-wider opacity-70">Structure Graph</span>
+
+                    {/* Theme Selector */}
+                    <div className="flex bg-black/20 rounded-md p-0.5 border border-white/5">
+                        {(Object.keys(GRAPH_THEMES) as GraphTheme[]).map((theme) => (
+                            <button
+                                key={theme}
+                                onClick={() => setCurrentTheme(theme)}
+                                className={`px-2 py-1 text-[9px] uppercase tracking-wider rounded-sm transition-all ${currentTheme === theme
+                                    ? 'bg-white/10 text-white font-bold shadow-sm'
+                                    : 'text-white/40 hover:text-white/70'
+                                    }`}
+                            >
+                                {GRAPH_THEMES[theme].label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 <div className="flex items-center gap-2">
                     <div className="flex items-center bg-muted/20 rounded-lg p-1 mr-2 border border-border/50">
+                        {/* Heatmap Controls */}
                         <button
                             onClick={() => setHeatmapMode('off')}
                             className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wider transition-all ${heatmapMode === 'off' ? "bg-background shadow-sm text-foreground font-bold" : "text-muted-foreground hover:text-foreground"}`}
@@ -1154,13 +1221,8 @@ function DependencyGraphContent({
                         >
                             Coupling
                         </button>
-                        <button
-                            onClick={() => setHeatmapMode('size')}
-                            className={`px-2 py-1 rounded-md text-[10px] uppercase tracking-wider transition-all ${heatmapMode === 'size' ? "bg-background shadow-sm text-foreground font-bold" : "text-muted-foreground hover:text-foreground"}`}
-                        >
-                            Size
-                        </button>
                     </div>
+
                     <button
                         onClick={() => {
                             setIsDrawingZone(!isDrawingZone);
@@ -1198,17 +1260,20 @@ function DependencyGraphContent({
                     minZoom={0.1}
                     maxZoom={2}
                     proOptions={{ hideAttribution: true }}
-                    style={{ cursor: isDrawingZone ? 'crosshair' : 'default' }}
+                    style={{
+                        cursor: isDrawingZone ? 'crosshair' : 'default',
+                        backgroundColor: themeStyles.bg
+                    }}
                 >
                     <Background
                         variant={BackgroundVariant.Dots}
                         gap={25}
                         size={2}
-                        color="rgba(255, 255, 255, 0.15)"
-                        className="animated-grid bg-slate-950"
+                        color={themeStyles.grid}
+                        className="animated-grid"
                     />
                     <MiniMap
-                        position="bottom-right"
+                        position="bottom-left"
                         style={{
                             backgroundColor: 'rgba(10, 10, 12, 0.8)',
                             borderRadius: '8px',
@@ -1225,6 +1290,60 @@ function DependencyGraphContent({
                         pannable
                     />
                 </ReactFlow>
+
+                {/* Floating Chat Button (Only visible if chatProps are provided) */}
+                {(chatProps && !isFloatingChatOpen) && (
+                    <motion.button
+                        initial={{ scale: 0, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="absolute bottom-6 right-6 z-20 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:bg-primary/90 transition-colors"
+                        onClick={() => setIsFloatingChatOpen(true)}
+                    >
+                        <MessageSquare size={20} />
+                    </motion.button>
+                )}
+
+                {/* Floating Chat Overlay */}
+                <AnimatePresence>
+                    {isFloatingChatOpen && chatProps && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                            transition={{ duration: 0.2 }}
+                            className="absolute bottom-6 right-6 z-30 w-[350px] h-[500px] flex flex-col rounded-xl overflow-hidden shadow-2xl border border-white/10 bg-black/80 backdrop-blur-xl ring-1 ring-white/10"
+                        >
+                            {/* Chat Header */}
+                            <div className="h-10 bg-white/5 border-b border-white/5 flex items-center justify-between px-3 shrink-0 cursor-move">
+                                <span className="text-xs font-bold text-white/80 flex items-center gap-2">
+                                    <Sparkles size={12} className="text-primary" />
+                                    AI Architect
+                                </span>
+                                <button
+                                    onClick={() => setIsFloatingChatOpen(false)}
+                                    className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-white/10 text-white/50 hover:text-white"
+                                >
+                                    <Minimize2 size={12} />
+                                </button>
+                            </div>
+
+                            {/* Chat Content */}
+                            <div className="flex-1 overflow-hidden relative">
+                                <ChatInterface
+                                    messages={chatProps.messages}
+                                    isLoading={chatProps.isLoading}
+                                    onSendMessage={chatProps.onSendMessage}
+                                    onDragStart={() => { }} // No-op as we use container drag if needed, or just fixed
+                                    currentFile={null} // Context agnostic or pass global
+                                    onCodeBlockClick={() => { }} // Handle if needed
+                                />
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
                 {/* Drawing preview overlay - rendered separately for smooth performance */}
                 {isDrawingZone && screenDragStart && screenCurrentDrag && (
                     <svg
@@ -1245,7 +1364,7 @@ function DependencyGraphContent({
                     </svg>
                 )}
                 {heatmapMode !== 'off' && (
-                    <div className="absolute bottom-4 left-4 glass-panel p-2 rounded-md shadow-lg z-10 flex flex-col gap-1 min-w-[120px]">
+                    <div className="absolute bottom-4 left-20 glass-panel p-2 rounded-md shadow-lg z-10 flex flex-col gap-1 min-w-[120px]">
                         <div className="flex items-center gap-2 mb-1">
                             <Activity size={10} className="text-primary" />
                             <span className="text-[10px] font-bold uppercase tracking-wider">Heatmap: {heatmapMode}</span>
